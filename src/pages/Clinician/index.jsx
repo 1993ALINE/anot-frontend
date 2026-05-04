@@ -32,14 +32,40 @@ function audiofmt(s) {
   return `${String(Math.floor(s / 60)).padStart(2,'0')}:${String(Math.floor(s % 60)).padStart(2,'0')}`
 }
 
+function parseTranscriptions(raw) {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed
+    return [parsed]
+  } catch { return [raw] }
+}
+
+function parseAINote(text) {
+  if (!text) return null
+  const sections = { chiefComplaint: '', hpi: '', pe: '', imaging: '', ap: '' }
+  const patterns = [
+    { key: 'chiefComplaint', regex: /CHIEF COMPLAINT[:\s]*([\s\S]*?)(?=HISTORY OF PRESENT ILLNESS|HPI|$)/i },
+    { key: 'hpi',           regex: /(?:HISTORY OF PRESENT ILLNESS|HPI)[:\s]*([\s\S]*?)(?=PHYSICAL EXAMINATION|PE[:\s]|$)/i },
+    { key: 'pe',            regex: /PHYSICAL EXAMINATION[:\s]*([\s\S]*?)(?=IMAGING|$)/i },
+    { key: 'imaging',       regex: /IMAGING[:\s]*([\s\S]*?)(?=ASSESSMENT|A&P|$)/i },
+    { key: 'ap',            regex: /(?:ASSESSMENT & PLAN|A&P)[:\s]*([\s\S]*?)$/i },
+  ]
+  patterns.forEach(({ key, regex }) => {
+    const match = text.match(regex)
+    if (match) sections[key] = match[1].trim()
+  })
+  return sections
+}
+
 const STATUS = {
-  'in-progress':        { label: 'Recording',    bg: '#FCEBEB', color: '#A32D2D' },
-  'upcoming':           { label: 'Upcoming',      bg: '#FAEEDA', color: '#633806' },
-  'recording-uploaded': { label: 'Awaiting Note', bg: '#E6F1FB', color: '#0C447C' },
-  'note-ready':         { label: 'Note Ready',    bg: '#E1F5EE', color: '#085041' },
-  'done':               { label: 'Done',          bg: '#E1F5EE', color: '#085041' },
-  'uploaded':           { label: 'Graded',        bg: '#E1F5EE', color: '#085041' },
-  'scheduled':          { label: 'Scheduled',     bg: '#F1EFE8', color: '#5F5E5A' },
+  'in-progress':        { label: 'Recording',      bg: '#FCEBEB', color: '#A32D2D' },
+  'upcoming':           { label: 'Upcoming',        bg: '#FAEEDA', color: '#633806' },
+  'recording-uploaded': { label: 'Awaiting Note',   bg: '#E6F1FB', color: '#0C447C' },
+  'note-ready':         { label: 'Note Ready',      bg: '#E1F5EE', color: '#085041' },
+  'done':               { label: 'Done',            bg: '#E1F5EE', color: '#085041' },
+  'uploaded':           { label: 'Uploaded to EMR', bg: '#E1F5EE', color: '#085041' },
+  'scheduled':          { label: 'Scheduled',       bg: '#F1EFE8', color: '#5F5E5A' },
 }
 
 // ─── AUDIO PLAYER ─────────────────────────────────────────────────────────────
@@ -55,7 +81,6 @@ function AudioPlayer({ visitId, durationSecs }) {
   const audioRef   = useRef(null)
   const maxTimeRef = useRef(durationSecs || 0)
 
-  // Fetch recording count
   useEffect(() => {
     if (!visitId) return
     const token = localStorage.getItem('token')
@@ -64,67 +89,32 @@ function AudioPlayer({ visitId, durationSecs }) {
     }).then(r => r.json()).then(d => { if (d.count > 0) setCount(d.count) }).catch(() => {})
   }, [visitId])
 
-  // Fetch audio blob
   useEffect(() => {
     if (!visitId) { setLoading(false); return }
-    setLoading(true)
-    setAudioUrl(null)
-    setCurrent(0)
-    setIsPlaying(false)
-    setDuration(durationSecs || 0)
-    maxTimeRef.current = durationSecs || 0
-
+    setLoading(true); setAudioUrl(null); setCurrent(0); setIsPlaying(false)
+    const initDur = activeIdx === 0 ? (durationSecs || 0) : 0
+    setDuration(initDur); maxTimeRef.current = initDur
     const token = localStorage.getItem('token')
     fetch(`http://localhost:5000/api/audio/${visitId}?index=${activeIdx}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => { if (res.ok) return res.blob(); throw new Error('no audio') })
-      .then(blob => {
-        if (blob.size === 0) throw new Error('empty')
-        setAudioUrl(URL.createObjectURL(blob))
-        setLoading(false)
-      })
+      .then(blob => { setAudioUrl(URL.createObjectURL(blob)); setLoading(false) })
       .catch(() => setLoading(false))
-
-    return () => {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = '' }
-    }
   }, [visitId, activeIdx])
 
-  // Attach audio events
   useEffect(() => {
     if (!audioUrl || !audioRef.current) return
     const audio = audioRef.current
     audio.src = audioUrl
-
-    const onMeta = () => {
-      const dur = audio.duration
-      if (dur && isFinite(dur) && dur > 0) {
-        setDuration(Math.floor(dur))
-        maxTimeRef.current = Math.floor(dur)
-      }
-    }
-    const onTime = () => {
-      const cur = Math.floor(audio.currentTime)
-      setCurrent(cur)
-      // For webm files without metadata, track max position as duration
-      if (cur > maxTimeRef.current) {
-        maxTimeRef.current = cur
-        setDuration(cur)
-      }
-    }
-    const onEnded = () => {
-      setIsPlaying(false)
-      setCurrent(0)
-      if (maxTimeRef.current > 0) setDuration(maxTimeRef.current)
-    }
-
+    const onMeta  = () => { if (audio.duration && isFinite(audio.duration)) { setDuration(Math.floor(audio.duration)); maxTimeRef.current = Math.floor(audio.duration) } }
+    const onTime  = () => { const c = Math.floor(audio.currentTime); setCurrent(c); if (c > maxTimeRef.current) { maxTimeRef.current = c; setDuration(c) } }
+    const onEnded = () => { setIsPlaying(false); setCurrent(0); if (maxTimeRef.current > 0) setDuration(maxTimeRef.current) }
     audio.addEventListener('loadedmetadata', onMeta)
     audio.addEventListener('durationchange', onMeta)
     audio.addEventListener('timeupdate',     onTime)
     audio.addEventListener('ended',          onEnded)
     audio.load()
-
     return () => {
       audio.removeEventListener('loadedmetadata', onMeta)
       audio.removeEventListener('durationchange', onMeta)
@@ -142,17 +132,15 @@ function AudioPlayer({ visitId, durationSecs }) {
   const skip = (secs) => {
     if (!audioRef.current || !audioUrl) return
     const max = maxTimeRef.current || duration || 0
-    const newTime = Math.max(0, Math.min(max, audioRef.current.currentTime + secs))
-    audioRef.current.currentTime = newTime
-    setCurrent(Math.floor(newTime))
+    const t = Math.max(0, Math.min(max, audioRef.current.currentTime + secs))
+    audioRef.current.currentTime = t; setCurrent(Math.floor(t))
   }
 
   const seek = (e) => {
     if (!audioRef.current || !duration) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const newTime = Math.round(((e.clientX - rect.left) / rect.width) * duration)
-    audioRef.current.currentTime = newTime
-    setCurrent(newTime)
+    const t = Math.round(((e.clientX - rect.left) / rect.width) * duration)
+    audioRef.current.currentTime = t; setCurrent(t)
   }
 
   const canPlay  = !!audioUrl && !loading
@@ -160,58 +148,157 @@ function AudioPlayer({ visitId, durationSecs }) {
   const totalStr = duration > 0 ? audiofmt(duration) : '--:--'
 
   return (
-    <div>
-      {/* Recording tabs */}
-      {count > 1 && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-          {Array.from({ length: count }, (_, i) => (
-            <button key={i} onClick={() => setActiveIdx(i)} style={{
-              padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 500,
-              cursor: 'pointer', border: '1px solid',
-              background:  activeIdx === i ? '#0F1E3C' : '#fff',
-              color:       activeIdx === i ? '#fff'    : '#5F5E5A',
-              borderColor: activeIdx === i ? '#0F1E3C' : '#E8E8E4',
-            }}>
-              Recording {i + 1}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-        <audio ref={audioRef} style={{ display: 'none' }} preload="metadata" />
-
-        <div style={{ flexShrink: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#0F1E3C', display: 'flex', alignItems: 'center', gap: 6 }}>
-            🎙 Recording {activeIdx + 1} of {count}
-            {loading  && <span style={{ fontSize: 10, color: '#888780', fontWeight: 400 }}>Loading...</span>}
-            {!loading && canPlay  && <span style={{ fontSize: 10, color: '#0D9E8A', fontWeight: 400 }}>● Ready</span>}
-            {!loading && !canPlay && <span style={{ fontSize: 10, color: '#B4B2A9', fontWeight: 400 }}>No audio</span>}
+    <div style={{ padding: '12px 20px', background: '#fff', borderBottom: '1px solid #E8E8E4' }}>
+      <audio ref={audioRef} style={{ display: 'none' }} preload="metadata" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        {count > 1 && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            {Array.from({ length: count }, (_, i) => (
+              <button key={i} onClick={() => setActiveIdx(i)} style={{ padding: '3px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid', background: activeIdx === i ? '#0F1E3C' : '#FAFAF8', color: activeIdx === i ? '#fff' : '#5F5E5A', borderColor: activeIdx === i ? '#0F1E3C' : '#E8E8E4' }}>Rec {i + 1}</button>
+            ))}
           </div>
-          <div style={{ fontSize: 11, color: '#888780', marginTop: 2 }}>
-            {audiofmt(current)} / {totalStr}
-          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#0F1E3C' }}>🎙 Recording {activeIdx + 1}{count > 1 ? ` of ${count}` : ''}</span>
+          {loading  && <span style={{ fontSize: 10, color: '#888780', background: '#F1EFE8', padding: '2px 7px', borderRadius: 10 }}>Loading...</span>}
+          {!loading && canPlay  && <span style={{ fontSize: 10, color: '#085041', background: '#E1F5EE', padding: '2px 7px', borderRadius: 10 }}>● Ready</span>}
+          {!loading && !canPlay && <span style={{ fontSize: 10, color: '#888780', background: '#F1EFE8', padding: '2px 7px', borderRadius: 10 }}>No audio</span>}
         </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button style={{ ...s.skipBtn, opacity: canPlay ? 1 : 0.35 }} onClick={() => skip(-5)}>−5s</button>
-          <button style={{ ...s.playBtn, opacity: canPlay ? 1 : 0.35, cursor: canPlay ? 'pointer' : 'not-allowed' }} onClick={toggle}>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#888780', fontWeight: 500 }}>{audiofmt(current)} / {totalStr}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <button onClick={() => skip(-5)} style={{ padding: '5px 10px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: canPlay ? 'pointer' : 'not-allowed', opacity: canPlay ? 1 : 0.4, fontFamily: 'inherit' }}>−5s</button>
+          <button onClick={toggle} style={{ width: 38, height: 38, borderRadius: '50%', background: canPlay ? '#0F1E3C' : '#C4C2B9', color: '#fff', border: 'none', fontSize: 14, cursor: canPlay ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             {loading ? '⏳' : isPlaying ? '⏸' : '▶'}
           </button>
-          <button style={{ ...s.skipBtn, opacity: canPlay ? 1 : 0.35 }} onClick={() => skip(5)}>+5s</button>
+          <button onClick={() => skip(5)} style={{ padding: '5px 10px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: canPlay ? 'pointer' : 'not-allowed', opacity: canPlay ? 1 : 0.4, fontFamily: 'inherit' }}>+5s</button>
         </div>
-
-        <div style={{ flex: 1, minWidth: 160 }}>
-          <div style={{ height: 6, background: '#E8E8E4', borderRadius: 3, overflow: 'hidden', cursor: canPlay ? 'pointer' : 'default' }}
-            onClick={canPlay ? seek : undefined}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div onClick={canPlay ? seek : undefined} style={{ height: 6, background: '#E8E8E4', borderRadius: 3, overflow: 'hidden', cursor: canPlay ? 'pointer' : 'default', marginBottom: 4 }}>
             <div style={{ height: '100%', background: '#0D9E8A', borderRadius: 3, width: `${progress}%`, transition: 'width 0.3s linear' }} />
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, color: '#888780' }}>{audiofmt(current)}</span>
-            <span style={{ fontSize: 10, color: '#888780', fontWeight: duration > 0 ? 500 : 400 }}>{totalStr}</span>
+            <span style={{ fontSize: 10, color: '#888780', fontWeight: 500 }}>{totalStr}</span>
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── AI NOTE MODAL ────────────────────────────────────────────────────────────
+
+function AINoteModal({ visit, onClose }) {
+  const [note, setNote]           = useState(null)
+  const [loading, setLoading]     = useState(true)
+  const [activeTab, setActiveTab] = useState('ai')
+  const [activeRec, setActiveRec] = useState(0)
+
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    fetch(`http://localhost:5000/api/notes/visit/${visit.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.json())
+      .then(d => { setNote(d.note); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [visit.id])
+
+  const transcriptions = note ? parseTranscriptions(note.transcription) : []
+  const aiSections     = note ? parseAINote(note.ai_draft) : null
+  const isProcessing   = !loading && (!note || (!note.transcription && !note.ai_draft))
+
+  const SECTION_LABELS = [
+    { key: 'chiefComplaint', label: 'Chief Complaint',                   icon: '🩺' },
+    { key: 'hpi',           label: 'History of Present Illness (HPI)',   icon: '📋' },
+    { key: 'pe',            label: 'Physical Examination (PE)',           icon: '🔍' },
+    { key: 'imaging',       label: 'Imaging',                            icon: '🖥' },
+    { key: 'ap',            label: 'Assessment & Plan (A&P)',             icon: '📝' },
+  ]
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 800, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(0,0,0,.2)' }}>
+        <div style={{ padding: '16px 24px', borderBottom: '1px solid #E8E8E4', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#0F1E3C' }}>🤖 AI Generated Note</div>
+            <div style={{ fontSize: 12, color: '#888780', marginTop: 3 }}>{visit.patient_name} · {visit.mrn} · {visit.visit_type} · {fmtTime(visit.visit_time)}</div>
+          </div>
+          <button onClick={onClose} style={{ background: '#F1EFE8', border: '1px solid #E8E8E4', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 12, color: '#5F5E5A', fontFamily: 'inherit' }}>✕ Close</button>
+        </div>
+        <div style={{ display: 'flex', borderBottom: '1px solid #E8E8E4', flexShrink: 0 }}>
+          {[['ai','🤖 AI Note'],['transcription','🎙 Transcriptions']].map(([k, label]) => (
+            <button key={k} onClick={() => setActiveTab(k)} style={{ padding: '10px 20px', fontSize: 13, fontWeight: activeTab === k ? 600 : 400, color: activeTab === k ? '#0F1E3C' : '#888780', background: 'none', border: 'none', borderBottom: activeTab === k ? '2px solid #0D9E8A' : '2px solid transparent', cursor: 'pointer', fontFamily: 'inherit' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 48, color: '#888780' }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
+              <div style={{ fontWeight: 600, color: '#0F1E3C' }}>Loading...</div>
+            </div>
+          ) : isProcessing ? (
+            <div style={{ textAlign: 'center', padding: 48 }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>🤖</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#0F1E3C', marginBottom: 8 }}>AI Processing...</div>
+              <div style={{ fontSize: 13, color: '#888780' }}>Transcription and note generation is in progress. This usually takes 1-2 minutes after recording ends.</div>
+            </div>
+          ) : activeTab === 'ai' ? (
+            <div>
+              {aiSections ? SECTION_LABELS.map(({ key, label, icon }) => (
+                <div key={key} style={{ marginBottom: 20, background: '#FAFAF8', border: '1px solid #E8E8E4', borderRadius: 12, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 16px', background: '#F1EFE8', borderBottom: '1px solid #E8E8E4', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>{icon}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#0F1E3C', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</span>
+                  </div>
+                  <div style={{ padding: '12px 16px', fontSize: 13, color: aiSections[key] === 'Not mentioned' ? '#B4B2A9' : '#0F1E3C', lineHeight: 1.7, fontStyle: aiSections[key] === 'Not mentioned' ? 'italic' : 'normal' }}>
+                    {aiSections[key] || 'Not available'}
+                  </div>
+                </div>
+              )) : (
+                <div style={{ textAlign: 'center', padding: 32, color: '#888780' }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>📄</div>
+                  <div>AI note not generated yet.</div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              {transcriptions.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 32, color: '#888780' }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>🎙</div>
+                  <div>Transcriptions not available yet.</div>
+                </div>
+              ) : (
+                <>
+                  {transcriptions.length > 1 && (
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                      {transcriptions.map((_, i) => (
+                        <button key={i} onClick={() => setActiveRec(i)} style={{ padding: '6px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: '1px solid', background: activeRec === i ? '#0F1E3C' : '#fff', color: activeRec === i ? '#fff' : '#5F5E5A', borderColor: activeRec === i ? '#0F1E3C' : '#E8E8E4' }}>
+                          Recording {i + 1}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ background: '#FAFAF8', border: '1px solid #E8E8E4', borderRadius: 12, padding: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#888780', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Recording {activeRec + 1} Transcription</div>
+                    <div style={{ fontSize: 13, color: '#0F1E3C', lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{transcriptions[activeRec]}</div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        <div style={{ padding: '12px 24px', borderTop: '1px solid #E8E8E4', background: '#FAFAF8', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 12, color: '#888780' }}>{isProcessing ? '⏳ AI is processing...' : `✓ ${transcriptions.length} recording${transcriptions.length !== 1 ? 's' : ''} transcribed`}</span>
+          <span style={{ fontSize: 12, color: '#888780' }}>This note is for reference only. Scribe will finalize.</span>
+        </div>
+      </div>
+      <style>{`@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}`}</style>
     </div>
   )
 }
@@ -222,6 +309,9 @@ export default function Clinician() {
   const navigate    = useNavigate()
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
 
+  const fileInputRef    = useRef(null)
+  const addFileInputRef = useRef(null)
+
   const [screen, setScreen]                     = useState('schedule')
   const [dayOffset, setDayOffset]               = useState(0)
   const [visits, setVisits]                     = useState([])
@@ -231,13 +321,15 @@ export default function Clinician() {
   const [paused, setPaused]                     = useState(false)
   const [timer, setTimer]                       = useState(0)
   const [uploadingAudio, setUploadingAudio]     = useState(false)
+  const [uploadVisit, setUploadVisit]           = useState(null)
+  const [isAppend, setIsAppend]                 = useState(false)
   const [additionalRec, setAdditionalRec]       = useState(null)
   const [additionalTimer, setAdditionalTimer]   = useState(0)
   const [additionalPaused, setAdditionalPaused] = useState(false)
   const [showAddForm, setShowAddForm]           = useState(false)
-  const [showEndConfirm, setShowEndConfirm]     = useState(false)
   const [showCalendar, setShowCalendar]         = useState(false)
   const [reviewNote, setReviewNote]             = useState(null)
+  const [aiNoteVisit, setAiNoteVisit]           = useState(null)
   const [playingVisit, setPlayingVisit]         = useState(null)
   const [histSearch, setHistSearch]             = useState('')
   const [toast, setToast]                       = useState(null)
@@ -275,10 +367,9 @@ export default function Clinician() {
     finally { setLoading(false) }
   }
 
-  const showToast = (msg, type = 'success') => {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3500)
-  }
+  const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500) }
+
+  // ── Add patient ──────────────────────────────────────────────────────────
 
   const addPatient = async () => {
     setAddError('')
@@ -305,20 +396,22 @@ export default function Clinician() {
     } catch (err) { setAddError(err.message) }
   }
 
+  // ── Edit visit ───────────────────────────────────────────────────────────
+
   const saveEditVisit = async () => {
     setEditError('')
     if (!editDraft.visit_time) { setEditError('Time is required.'); return }
     try {
       setEditSaving(true)
       await visitsAPI.updateVisit(editVisit.id, { visit_time: editDraft.visit_time, visit_type: editDraft.visit_type })
-      setVisits(prev => prev.map(v =>
-        v.id === editVisit.id ? { ...v, visit_time: editDraft.visit_time, visit_type: editDraft.visit_type } : v
-      ).sort((a, b) => a.visit_time.localeCompare(b.visit_time)))
+      setVisits(prev => prev.map(v => v.id === editVisit.id ? { ...v, visit_time: editDraft.visit_time, visit_type: editDraft.visit_type } : v).sort((a, b) => a.visit_time.localeCompare(b.visit_time)))
       setEditVisit(null)
       showToast(`${editVisit.patient_name} updated.`)
     } catch (err) { setEditError(err.message) }
     finally { setEditSaving(false) }
   }
+
+  // ── Delete visit ─────────────────────────────────────────────────────────
 
   const deleteVisit = async (visit) => {
     if (!window.confirm(`Remove ${visit.patient_name} from schedule?`)) return
@@ -329,10 +422,55 @@ export default function Clinician() {
     } catch (err) { showToast(err.message, 'error') }
   }
 
+  // ── File upload handler ───────────────────────────────────────────────────
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file || !uploadVisit) return
+    e.target.value = ''
+    try {
+      setUploadingAudio(true)
+      if (isAppend) {
+        // Append additional recording
+        const formData = new FormData()
+        formData.append('audio', file, file.name)
+        const res = await fetch(`http://localhost:5000/api/audio/${uploadVisit.id}/append`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          body: formData,
+        })
+        if (!res.ok) throw new Error('Upload failed')
+        showToast(`✓ Additional audio uploaded for ${uploadVisit.patient_name}`)
+      } else {
+        // Primary upload — end visit
+        await visitsAPI.updateStatus(uploadVisit.id, 'in-progress')
+        const formData = new FormData()
+        formData.append('audio', file, file.name)
+        const res = await fetch(`http://localhost:5000/api/audio/${uploadVisit.id}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          body: formData,
+        })
+        if (!res.ok) throw new Error('Upload failed')
+        await visitsAPI.endVisit(uploadVisit.id, 0)
+        setVisits(prev => prev.map(v => v.id === uploadVisit.id
+          ? { ...v, status: 'recording-uploaded', audio_file: 'uploaded' }
+          : v
+        ))
+        showToast(`✓ Audio uploaded for ${uploadVisit.patient_name}. AI is generating note...`)
+      }
+    } catch (err) { showToast('Upload failed: ' + err.message, 'error') }
+    finally { setUploadingAudio(false); setUploadVisit(null); setIsAppend(false) }
+  }
+
+  // ── Mime type ────────────────────────────────────────────────────────────
+
   const getMimeType = () => {
     const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', 'audio/mp4']
     return types.find(t => MediaRecorder.isTypeSupported(t)) || ''
   }
+
+  // ── Start visit ──────────────────────────────────────────────────────────
 
   const startVisit = async (visit) => {
     if (activeVisit) return
@@ -355,6 +493,8 @@ export default function Clinician() {
     }
   }
 
+  // ── Pause/Resume ─────────────────────────────────────────────────────────
+
   const pauseResume = () => {
     if (!paused) {
       clearInterval(timerRef.current)
@@ -367,11 +507,12 @@ export default function Clinician() {
     }
   }
 
+  // ── End visit ────────────────────────────────────────────────────────────
+
   const endVisit = async () => {
     try {
       clearInterval(timerRef.current)
       setUploadingAudio(true)
-      setShowEndConfirm(false)
       const recorder = mediaRecorderRef.current
       const visitId  = activeVisit.id
       const patName  = activeVisit.patient_name
@@ -384,7 +525,6 @@ export default function Clinician() {
               try {
                 const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
                 await visitsAPI.uploadAudio(visitId, blob)
-                showToast('✓ Recording uploaded')
               } catch (err) { showToast('Audio upload failed.', 'error') }
             }
             recorder.stream.getTracks().forEach(t => t.stop())
@@ -399,12 +539,14 @@ export default function Clinician() {
         ? { ...v, status: 'recording-uploaded', audio_file: 'uploaded', duration_seconds: timer }
         : v
       ))
-      showToast(`Visit ended for ${patName}. Awaiting scribe note.`)
+      showToast(`✓ Visit ended. AI is generating note for ${patName}...`)
       setActiveVisit(null); setTimer(0); setPaused(false)
       audioChunksRef.current = []; mediaRecorderRef.current = null
     } catch (err) { showToast(err.message, 'error') }
     finally { setUploadingAudio(false) }
   }
+
+  // ── Additional recording ─────────────────────────────────────────────────
 
   const startAdditionalRec = async (visit) => {
     if (activeVisit || additionalRec) return
@@ -458,6 +600,8 @@ export default function Clinician() {
     finally { setUploadingAudio(false) }
   }
 
+  // ── Misc ─────────────────────────────────────────────────────────────────
+
   const pickDate = (e) => {
     const picked = new Date(e.target.value + 'T00:00:00')
     const today  = new Date(); today.setHours(0,0,0,0); picked.setHours(0,0,0,0)
@@ -473,7 +617,7 @@ export default function Clinician() {
     } catch (err) { showToast(err.message, 'error') }
   }
 
-  // ─── SIDEBAR ──────────────────────────────────────────────────────────────
+  // ─── SIDEBAR ──────────────────────────────────────
 
   const Sidebar = () => (
     <div style={s.sidebar}>
@@ -493,8 +637,7 @@ export default function Clinician() {
         <div style={s.miniSection}>
           <div style={s.miniTitle}>Quick Jump</div>
           {QUICK_DAYS.map(o => (
-            <div key={o} style={{ ...s.miniDay, background: o === dayOffset ? 'rgba(13,158,138,.2)' : 'transparent' }}
-              onClick={() => setDayOffset(o)}>
+            <div key={o} style={{ ...s.miniDay, background: o === dayOffset ? 'rgba(13,158,138,.2)' : 'transparent' }} onClick={() => setDayOffset(o)}>
               <span style={{ fontSize: 11, color: '#fff' }}>{o === -1 ? 'Yesterday' : o === 0 ? 'Today' : o === 1 ? 'Tomorrow' : localDate(o, 'short')}</span>
             </div>
           ))}
@@ -515,7 +658,7 @@ export default function Clinician() {
     </div>
   )
 
-  // ─── NOTE REVIEW ──────────────────────────────────────────────────────────
+  // ─── NOTE REVIEW ──────────────────────────────────
 
   if (reviewNote) {
     return (
@@ -547,7 +690,7 @@ export default function Clinician() {
     )
   }
 
-  // ─── HISTORY ──────────────────────────────────────────────────────────────
+  // ─── HISTORY ──────────────────────────────────────
 
   if (screen === 'history') {
     const filtered = history.filter(h =>
@@ -560,9 +703,7 @@ export default function Clinician() {
         <div style={s.main}>
           <Topbar title="Visit History" meta={`${history.length} visits`} />
           <div style={s.body}>
-            <input style={{ ...s.input, maxWidth: 320, marginBottom: 16 }}
-              placeholder="🔍 Search patient or MRN..."
-              value={histSearch} onChange={e => setHistSearch(e.target.value)} />
+            <input style={{ ...s.input, maxWidth: 320, marginBottom: 16 }} placeholder="🔍 Search patient or MRN..." value={histSearch} onChange={e => setHistSearch(e.target.value)} />
             {loading ? <LoadingBox /> : filtered.length === 0 ? <Empty icon="🕐" title="No history yet" sub="Completed visits will appear here" /> : (
               <div style={s.table}>
                 <div style={s.tHead}>
@@ -581,23 +722,12 @@ export default function Clinician() {
                     <div style={{ flex: 1, fontSize: 12 }}>{h.duration_seconds ? fmtSecs(h.duration_seconds) : '—'}</div>
                     <div style={{ flex: 1, fontSize: 12 }}>{h.scribe_name || '—'}</div>
                     <div style={{ flex: 1.5, display: 'flex', gap: 6 }}>
-                      <button style={{ ...s.btn, background: '#E1F5EE', color: '#085041', border: '1px solid #9FE1CB', fontSize: 11, padding: '4px 10px' }}
-                        onClick={() => setPlayingVisit(h)}>🔊 Audio</button>
-                      {h.final_note && (
-                        <button style={{ ...s.btn, ...s.btnGhost, fontSize: 11, padding: '4px 10px' }}
-                          onClick={async () => {
-  try {
-    const data = await notesAPI.getByVisit(h.id)
-    const note = data.note
-    setReviewNote({
-      ...h,
-      final_note:  note?.final_note  || '',
-      note_id:     note?.id          || null,
-      scribe_name: note?.scribe_name || h.scribe_name || '—',
-    })
-  } catch { showToast('Failed to load note.', 'error') }
-}}>📋 Note</button>
-                      )}
+                      <button style={{ ...s.btn, background: '#E1F5EE', color: '#085041', border: '1px solid #9FE1CB', fontSize: 11, padding: '4px 10px' }} onClick={() => setPlayingVisit(h)}>🔊</button>
+                      {h.ai_draft && <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5', fontSize: 11, padding: '4px 10px' }} onClick={() => setAiNoteVisit(h)}>🤖</button>}
+                      {h.final_note && <button style={{ ...s.btn, ...s.btnGhost, fontSize: 11, padding: '4px 10px' }} onClick={async () => {
+                        try { const data = await notesAPI.getByVisit(h.id); setReviewNote({ ...h, final_note: data.note?.final_note, note_id: data.note?.id, scribe_name: data.note?.scribe_name || h.scribe_name }) }
+                        catch { showToast('Failed to load note.', 'error') }
+                      }}>📋</button>}
                     </div>
                   </div>
                 ))}
@@ -606,11 +736,23 @@ export default function Clinician() {
           </div>
         </div>
         {toast && <Toast toast={toast} />}
+        {aiNoteVisit && <AINoteModal visit={aiNoteVisit} onClose={() => setAiNoteVisit(null)} />}
+        {playingVisit && (
+          <div style={s.overlay}>
+            <div style={{ ...s.modal, maxWidth: 560 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+                <div><div style={{ fontSize: 15, fontWeight: 700, color: '#0F1E3C' }}>🔊 {playingVisit.patient_name}</div><div style={{ fontSize: 12, color: '#888780', marginTop: 3 }}>{playingVisit.mrn} · {playingVisit.visit_type}</div></div>
+                <button style={{ ...s.btn, ...s.btnGhost, padding: '4px 12px' }} onClick={() => setPlayingVisit(null)}>✕</button>
+              </div>
+              <AudioPlayer visitId={playingVisit.id} durationSecs={playingVisit.duration_seconds} />
+            </div>
+          </div>
+        )}
       </div>
     )
   }
 
-  // ─── PROFILE ──────────────────────────────────────────────────────────────
+  // ─── PROFILE ──────────────────────────────────────
 
   if (screen === 'profile') {
     return (
@@ -634,19 +776,6 @@ export default function Clinician() {
                 ))}
               </div>
             </div>
-            <div style={{ ...s.card, marginTop: 16 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 14 }}>My Statistics</div>
-              <div style={s.statsGrid}>
-                {[
-                  ['Total Visits',  history.length, '#0F1E3C'],
-                  ['Today',         visits.length,  '#0D9E8A'],
-                  ['Awaiting Note', visits.filter(v => v.status === 'recording-uploaded').length, '#378ADD'],
-                  ['Note Ready',    visits.filter(v => v.status === 'note-ready').length, '#0D9E8A'],
-                ].map(([l, v, c]) => (
-                  <div key={l} style={s.stat}><div style={{ ...s.statVal, color: c }}>{v}</div><div style={s.statLbl}>{l}</div></div>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
         {toast && <Toast toast={toast} />}
@@ -654,7 +783,7 @@ export default function Clinician() {
     )
   }
 
-  // ─── SCHEDULE ─────────────────────────────────────────────────────────────
+  // ─── SCHEDULE ─────────────────────────────────────
 
   return (
     <div style={s.page}>
@@ -686,6 +815,10 @@ export default function Clinician() {
 
         <div style={s.body}>
 
+          {/* Hidden file inputs */}
+          <input ref={fileInputRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={handleFileUpload} />
+          <input ref={addFileInputRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={handleFileUpload} />
+
           {/* Active recording banner */}
           {activeVisit && (
             <div style={s.recBanner}>
@@ -695,7 +828,7 @@ export default function Clinician() {
                 <div style={{ fontSize: 11, color: '#A32D2D', marginTop: 2 }}>{fmtSecs(timer)} · {paused ? '⏸ Paused' : '🎙 Recording...'}</div>
               </div>
               <button style={{ ...s.btn, ...s.btnAmber }} onClick={pauseResume}>{paused ? '▶ Resume' : '⏸ Pause'}</button>
-              <button style={{ ...s.btn, ...s.btnRed }}   onClick={() => setShowEndConfirm(true)}>■ End Visit</button>
+              <button style={{ ...s.btn, ...s.btnRed }} onClick={endVisit}>■ End Visit</button>
             </div>
           )}
 
@@ -708,25 +841,14 @@ export default function Clinician() {
                 <div style={{ fontSize: 11, color: '#378ADD', marginTop: 2 }}>{fmtSecs(additionalTimer)} · {additionalPaused ? '⏸ Paused' : '🎙 Recording...'}</div>
               </div>
               <button style={{ ...s.btn, ...s.btnAmber }} onClick={pauseResumeAdditional}>{additionalPaused ? '▶ Resume' : '⏸ Pause'}</button>
-              <button style={{ ...s.btn, ...s.btnRed }}   onClick={stopAdditionalRec}>■ Stop & Upload</button>
+              <button style={{ ...s.btn, ...s.btnRed }} onClick={stopAdditionalRec}>■ Stop & Upload</button>
             </div>
           )}
 
-          {/* Uploading */}
+          {/* Uploading banner */}
           {uploadingAudio && (
             <div style={{ ...s.recBanner, background: '#E6F1FB', borderColor: '#B8D6F5' }}>
-              <div style={{ fontSize: 13, color: '#0C447C', fontWeight: 500 }}>⏳ Uploading audio... please wait</div>
-            </div>
-          )}
-
-          {/* End confirm */}
-          {showEndConfirm && (
-            <div style={s.confirm}>
-              <div style={{ fontSize: 14 }}>End visit for <strong>{activeVisit?.patient_name}</strong>? Recording will be sent to scribe.</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={{ ...s.btn, ...s.btnGhost }} onClick={() => setShowEndConfirm(false)}>Cancel</button>
-                <button style={{ ...s.btn, ...s.btnNavy }} onClick={endVisit}>Yes, End Visit</button>
-              </div>
+              <div style={{ fontSize: 13, color: '#0C447C', fontWeight: 500 }}>⏳ Uploading & processing... AI note will be ready shortly</div>
             </div>
           )}
 
@@ -759,7 +881,7 @@ export default function Clinician() {
               ['Total',         visits.length, '#0F1E3C'],
               ['Awaiting Note', visits.filter(v => v.status === 'recording-uploaded').length, '#378ADD'],
               ['Note Ready',    visits.filter(v => v.status === 'note-ready').length, '#0D9E8A'],
-              ['Remaining',     visits.filter(v => ['scheduled','upcoming','in-progress'].includes(v.status)).length, '#E8940A'],
+              ['Uploaded EMR',  visits.filter(v => v.status === 'uploaded').length, '#E8940A'],
             ].map(([l, v, c]) => (
               <div key={l} style={s.stat}><div style={{ ...s.statVal, color: c }}>{v}</div><div style={s.statLbl}>{l}</div></div>
             ))}
@@ -791,74 +913,86 @@ export default function Clinician() {
                   <div style={s.rowTime}>{fmtTime(visit.visit_time)}</div>
                   <div>
                     <div style={s.rowName}>{visit.patient_name}</div>
-                    <div style={s.rowMeta}>
-                      {visit.mrn} · {visit.visit_type}
-                      {visit.duration_seconds ? ` · ${fmtSecs(visit.duration_seconds)}` : ''}
-                    </div>
+                    <div style={s.rowMeta}>{visit.mrn} · {visit.visit_type}{visit.duration_seconds ? ` · ${fmtSecs(visit.duration_seconds)}` : ''}</div>
                   </div>
                 </div>
-                <div style={{ ...s.rowRight, flexWrap: 'wrap' }}>
+                <div style={{ ...s.rowRight, flexWrap: 'wrap', gap: 6 }}>
                   <span style={{ ...s.badge, background: st.bg, color: st.color }}>{st.label}</span>
+
+                  {/* Uploaded to EMR badge */}
+                  {visit.status === 'uploaded' && (
+                    <span style={{ ...s.badge, background: '#E1F5EE', color: '#085041' }}>✓ EMR</span>
+                  )}
 
                   {/* Audio play button */}
                   {hasAudio && !['upcoming','scheduled','in-progress'].includes(visit.status) && (
-                    <button style={{ ...s.btn, background: '#E1F5EE', color: '#085041', border: '1px solid #9FE1CB', padding: '7px 10px' }}
-                      onClick={() => setPlayingVisit(visit)} title="Play recording">🔊</button>
+                    <button style={{ ...s.btn, background: '#E1F5EE', color: '#085041', border: '1px solid #9FE1CB', padding: '6px 10px' }}
+                      onClick={() => setPlayingVisit(visit)}>🔊</button>
                   )}
 
                   {(isPast || isFuture) && <button style={s.btn} disabled>{isPast ? '✓ Past' : '⏳ Upcoming'}</button>}
 
+                  {/* Upcoming — Record Live + Upload File + Edit + Delete */}
                   {!isPast && !isFuture && visit.status === 'upcoming' && (
-                    <div style={{ display: 'flex', gap: 5 }}>
-                      <button style={{ ...s.btn, ...s.btnNavy, ...(activeVisit ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}
-                        onClick={() => startVisit(visit)} disabled={!!activeVisit}>🎙 Record Live</button>
-                      <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5', padding: '7px 10px' }}
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                      <button
+                        style={{ ...s.btn, ...s.btnNavy, ...(activeVisit ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}
+                        onClick={() => startVisit(visit)} disabled={!!activeVisit}>
+                        🎙 Record Live
+                      </button>
+                      <button
+                        style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5', ...(activeVisit ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}
+                        onClick={() => { if (!activeVisit) { setUploadVisit(visit); setIsAppend(false); fileInputRef.current?.click() } }}
+                        disabled={!!activeVisit}>
+                        📁 Upload File
+                      </button>
+                      <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5', padding: '6px 10px' }}
                         onClick={() => { setEditVisit(visit); setEditDraft({ visit_time: visit.visit_time, visit_type: visit.visit_type }); setEditError('') }}>✏️</button>
-                      <button style={{ ...s.btn, ...s.btnRed, padding: '7px 10px' }} onClick={() => deleteVisit(visit)}>🗑</button>
+                      <button style={{ ...s.btn, ...s.btnRed, padding: '6px 10px' }} onClick={() => deleteVisit(visit)}>🗑</button>
                     </div>
                   )}
 
-                  {!isPast && !isFuture && visit.status === 'scheduled' && (
-                    <div style={{ display: 'flex', gap: 5 }}>
-                      <button style={{ ...s.btn, opacity: 0.4 }} disabled>🎙 Record Live</button>
-                      <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5', padding: '7px 10px' }}
-                        onClick={() => { setEditVisit(visit); setEditDraft({ visit_time: visit.visit_time, visit_type: visit.visit_type }); setEditError('') }}>✏️</button>
-                      <button style={{ ...s.btn, ...s.btnRed, padding: '7px 10px' }} onClick={() => deleteVisit(visit)}>🗑</button>
-                    </div>
-                  )}
-
+                  {/* In progress */}
                   {!isPast && !isFuture && visit.status === 'in-progress' && (
                     <button style={{ ...s.btn, background: '#E1F5EE', color: '#085041', border: '1px solid #9FE1CB' }} disabled>🎙 Recording...</button>
                   )}
 
+                  {/* Awaiting note — AI Note + Record More + Upload More */}
                   {!isPast && !isFuture && visit.status === 'recording-uploaded' && (
-                    <div style={{ display: 'flex', gap: 5 }}>
-                      <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5', ...(activeVisit || additionalRec ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                      <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5' }}
+                        onClick={() => setAiNoteVisit(visit)}>🤖 AI Note</button>
+                      <button
+                        style={{ ...s.btn, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4', ...(activeVisit || additionalRec ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}
                         onClick={() => startAdditionalRec(visit)} disabled={!!activeVisit || !!additionalRec}>
-                        🎙 + Record More
+                        🎙 + More
+                      </button>
+                      <button
+                        style={{ ...s.btn, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4' }}
+                        onClick={() => { setUploadVisit(visit); setIsAppend(true); addFileInputRef.current?.click() }}>
+                        📁 + Upload
                       </button>
                     </div>
                   )}
 
-{!isPast && !isFuture && visit.status === 'note-ready' && (
-  <button style={{ ...s.btn, ...s.btnNavy }} onClick={async () => {
-    try {
-      const data = await notesAPI.getByVisit(visit.id)
-      const note = data.note
-      setReviewNote({
-        ...visit,
-        final_note:  note?.final_note  || '',
-        note_id:     note?.id          || null,
-        scribe_name: note?.scribe_name || visit.scribe_name || '—',
-      })
-    } catch (err) {
-      showToast('Failed to load note.', 'error')
-    }
-  }}>📋 Review Note</button>
-)}
+                  {/* Note Ready — AI Note + Review Final Note */}
+                  {!isPast && !isFuture && visit.status === 'note-ready' && (
+                    <div style={{ display: 'flex', gap: 5 }}>
+                      <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5' }}
+                        onClick={() => setAiNoteVisit(visit)}>🤖 AI Note</button>
+                      <button style={{ ...s.btn, ...s.btnNavy }} onClick={async () => {
+                        try {
+                          const data = await notesAPI.getByVisit(visit.id)
+                          setReviewNote({ ...visit, final_note: data.note?.final_note, note_id: data.note?.id, scribe_name: data.note?.scribe_name || visit.scribe_name })
+                        } catch { showToast('Failed to load note.', 'error') }
+                      }}>📋 Final Note</button>
+                    </div>
+                  )}
 
-                  {!isPast && !isFuture && ['done','uploaded'].includes(visit.status) && (
-                    <button style={s.btn} disabled>✓ Done</button>
+                  {/* Uploaded */}
+                  {!isPast && !isFuture && visit.status === 'uploaded' && (
+                    <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5' }}
+                      onClick={() => setAiNoteVisit(visit)}>🤖 AI Note</button>
                   )}
                 </div>
               </div>
@@ -897,22 +1031,20 @@ export default function Clinician() {
       {playingVisit && (
         <div style={s.overlay}>
           <div style={{ ...s.modal, maxWidth: 560 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#0F1E3C' }}>🔊 {playingVisit.patient_name}</div>
-                <div style={{ fontSize: 12, color: '#888780', marginTop: 3 }}>
-                  {playingVisit.mrn} · {playingVisit.visit_type} · {fmtTime(playingVisit.visit_time)}
-                  {playingVisit.duration_seconds ? ` · Total: ${fmtSecs(playingVisit.duration_seconds)}` : ''}
-                </div>
+                <div style={{ fontSize: 12, color: '#888780', marginTop: 3 }}>{playingVisit.mrn} · {playingVisit.visit_type} · {fmtTime(playingVisit.visit_time)}{playingVisit.duration_seconds ? ` · ${fmtSecs(playingVisit.duration_seconds)}` : ''}</div>
               </div>
               <button style={{ ...s.btn, ...s.btnGhost, padding: '4px 12px' }} onClick={() => setPlayingVisit(null)}>✕</button>
             </div>
-            <div style={{ marginTop: 16 }}>
-              <AudioPlayer visitId={playingVisit.id} durationSecs={playingVisit.duration_seconds} />
-            </div>
+            <AudioPlayer visitId={playingVisit.id} durationSecs={playingVisit.duration_seconds} />
           </div>
         </div>
       )}
+
+      {/* AI Note Modal */}
+      {aiNoteVisit && <AINoteModal visit={aiNoteVisit} onClose={() => setAiNoteVisit(null)} />}
 
       {toast && <Toast toast={toast} />}
       <style>{`@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}`}</style>
@@ -925,7 +1057,7 @@ export default function Clinician() {
 function Toast({ toast }) {
   return (
     <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.type === 'error' ? '#FCEBEB' : '#0F1E3C', color: toast.type === 'error' ? '#A32D2D' : '#fff', padding: '12px 20px', borderRadius: 10, fontSize: 13, fontWeight: 500, zIndex: 999, boxShadow: '0 4px 20px rgba(0,0,0,.15)' }}>
-      {toast.type === 'error' ? '⚠ ' : '✓ '}{toast.msg}
+    {toast.type === 'error' ? '⚠ ' : '✓ '}{toast.msg}
     </div>
   )
 }
@@ -939,7 +1071,7 @@ function Empty({ icon, title, sub }) {
     <div style={{ textAlign: 'center', padding: '48px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
       <div style={{ fontSize: 36 }}>{icon}</div>
       <div style={{ fontSize: 15, fontWeight: 600, color: '#0F1E3C' }}>{title}</div>
-      <div style={{ fontSize: 13, color: '#888780' }}>{sub}</div>
+      {sub && <div style={{ fontSize: 13, color: '#888780' }}>{sub}</div>}
     </div>
   )
 }
@@ -969,7 +1101,7 @@ const s = {
   topRight:    { display: 'flex', alignItems: 'center', gap: 12 },
   avatar:      { width: 34, height: 34, borderRadius: '50%', background: '#0F1E3C', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, flexShrink: 0 },
   body:        { padding: '22px 24px', flex: 1, overflowY: 'auto' },
-  btn:         { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', border: '1px solid #E8E8E4', background: '#fff', color: '#0F1E3C', fontFamily: 'inherit' },
+  btn:         { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', border: '1px solid #E8E8E4', background: '#fff', color: '#0F1E3C', fontFamily: 'inherit', whiteSpace: 'nowrap' },
   btnNavy:     { background: '#0F1E3C', color: '#fff', border: 'none' },
   btnTeal:     { background: '#0D9E8A', color: '#fff', border: 'none' },
   btnRed:      { background: '#E24B4A', color: '#fff', border: 'none' },
@@ -984,7 +1116,7 @@ const s = {
   secLabel:    { fontSize: 11, fontWeight: 600, color: '#888780', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 10 },
   row:         { display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', border: '1px solid #E8E8E4', borderRadius: 12, padding: '12px 16px', marginBottom: 8 },
   rowLeft:     { display: 'flex', alignItems: 'center', gap: 14 },
-  rowRight:    { display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 },
+  rowRight:    { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 },
   rowTime:     { fontSize: 12, color: '#888780', minWidth: 60, fontWeight: 500 },
   rowName:     { fontSize: 14, fontWeight: 600, color: '#0F1E3C' },
   rowMeta:     { fontSize: 11, color: '#888780', marginTop: 2 },
@@ -1002,7 +1134,6 @@ const s = {
   calPopup:    { position: 'absolute', top: 42, right: 0, background: '#fff', border: '1px solid #E8E8E4', borderRadius: 10, padding: 12, zIndex: 100, boxShadow: '0 4px 20px rgba(0,0,0,.1)' },
   recBanner:   { display: 'flex', alignItems: 'center', gap: 14, background: '#FCEBEB', border: '1px solid #F09595', borderRadius: 12, padding: '12px 16px', marginBottom: 14, flexWrap: 'wrap' },
   recDot:      { width: 9, height: 9, borderRadius: '50%', background: '#E24B4A', flexShrink: 0, animation: 'pulse 1.2s infinite' },
-  confirm:     { display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', border: '1px solid #E8E8E4', borderRadius: 12, padding: '14px 18px', marginBottom: 14, gap: 16, flexWrap: 'wrap' },
   pastBanner:  { background: '#F1EFE8', border: '1px solid #E8E8E4', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#5F5E5A', marginBottom: 12 },
   futureBanner:{ background: '#E6F1FB', border: '1px solid #B8D6F5', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#0C447C', marginBottom: 12 },
   empty:       { textAlign: 'center', padding: '48px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 },
@@ -1013,8 +1144,6 @@ const s = {
   profGrid:    { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 },
   profFieldLabel: { fontSize: 11, fontWeight: 600, color: '#888780', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 },
   profFieldVal:   { fontSize: 14, color: '#0F1E3C' },
-  skipBtn:     { padding: '5px 9px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
-  playBtn:     { width: 34, height: 34, borderRadius: '50%', background: '#0F1E3C', color: '#fff', border: 'none', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   overlay:     { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 500, padding: 20 },
   modal:       { background: '#fff', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420, boxShadow: '0 8px 40px rgba(0,0,0,.18)' },
   modalTitle:  { fontSize: 16, fontWeight: 700, color: '#0F1E3C', marginBottom: 20 },

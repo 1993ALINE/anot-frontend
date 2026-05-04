@@ -41,6 +41,18 @@ function fmtSecs(s) {
   return `${String(Math.floor(s / 60)).padStart(2,'0')}:${String(Math.floor(s % 60)).padStart(2,'0')}`
 }
 
+// Parse transcription stored as JSON array or plain string
+function parseTranscriptions(raw) {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed
+    return [parsed]
+  } catch {
+    return [raw]
+  }
+}
+
 const STATUS_CFG = {
   'recording-uploaded': { label: 'Pending',   cls: 'badge-amber' },
   'note-ready':         { label: 'Pending',   cls: 'badge-amber' },
@@ -54,18 +66,16 @@ function ScoreBar({ value }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <div style={{ flex: 1, height: 6, background: '#E8E8E4', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${value}%`, height: '100%', borderRadius: 3,
-          background: value >= 90 ? '#0D9E8A' : value >= 75 ? '#E8940A' : '#E24B4A',
-          transition: 'width 0.3s ease' }} />
+        <div style={{ width: `${value}%`, height: '100%', borderRadius: 3, background: value >= 90 ? '#0D9E8A' : value >= 75 ? '#E8940A' : '#E24B4A' }} />
       </div>
-      <span style={{ fontSize: 12, fontWeight: 600, color: '#0F1E3C', minWidth: 28, textAlign: 'right' }}>{value}</span>
+      <span style={{ fontSize: 12, fontWeight: 600, color: '#0F1E3C', minWidth: 28 }}>{value}</span>
     </div>
   )
 }
 
 // ─── AUDIO PLAYER ─────────────────────────────────────────────────────────────
 
-function AudioPlayer({ visitId, durationSecs }) {
+function AudioPlayer({ visitId, durationSecs, onTabChange }) {
   const [count, setCount]         = useState(1)
   const [activeIdx, setActiveIdx] = useState(0)
   const [status, setStatus]       = useState('loading')
@@ -89,9 +99,7 @@ function AudioPlayer({ visitId, durationSecs }) {
     setStatus('loading'); setPlaying(false); setCurrent(0)
     const initDur = activeIdx === 0 ? (durationSecs || 0) : 0
     setDuration(initDur); maxTimeRef.current = initDur
-
     if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null }
-
     const token = localStorage.getItem('token')
     fetch(`http://localhost:5000/api/audio/${visitId}?index=${activeIdx}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -104,7 +112,6 @@ function AudioPlayer({ visitId, durationSecs }) {
         setStatus('ready')
       })
       .catch(() => setStatus('error'))
-
     return () => {
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = '' }
       if (blobRef.current)  { URL.revokeObjectURL(blobRef.current); blobRef.current = null }
@@ -114,15 +121,8 @@ function AudioPlayer({ visitId, durationSecs }) {
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
-    const onMeta = () => {
-      const dur = audio.duration
-      if (dur && isFinite(dur) && dur > 0) { setDuration(Math.floor(dur)); maxTimeRef.current = Math.floor(dur) }
-    }
-    const onTime = () => {
-      const cur = Math.floor(audio.currentTime)
-      setCurrent(cur)
-      if (cur > maxTimeRef.current) { maxTimeRef.current = cur; setDuration(cur) }
-    }
+    const onMeta = () => { const dur = audio.duration; if (dur && isFinite(dur) && dur > 0) { setDuration(Math.floor(dur)); maxTimeRef.current = Math.floor(dur) } }
+    const onTime = () => { const cur = Math.floor(audio.currentTime); setCurrent(cur); if (cur > maxTimeRef.current) { maxTimeRef.current = cur; setDuration(cur) } }
     const onEnded = () => { setPlaying(false); setCurrent(0); if (maxTimeRef.current > 0) setDuration(maxTimeRef.current) }
     audio.addEventListener('loadedmetadata', onMeta)
     audio.addEventListener('durationchange', onMeta)
@@ -135,6 +135,11 @@ function AudioPlayer({ visitId, durationSecs }) {
       audio.removeEventListener('ended',          onEnded)
     }
   }, [])
+
+  const handleTabChange = (i) => {
+    setActiveIdx(i)
+    if (onTabChange) onTabChange(i)
+  }
 
   const toggle = () => {
     const audio = audioRef.current
@@ -166,71 +171,33 @@ function AudioPlayer({ visitId, durationSecs }) {
   return (
     <div style={{ padding: '14px 20px', background: '#fff', borderBottom: '1px solid #E8E8E4' }}>
       <audio ref={audioRef} preload="metadata" style={{ display: 'none' }} />
-
-      {/* Row 1 — Recording tabs + status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         {count > 1 && (
           <div style={{ display: 'flex', gap: 6 }}>
             {Array.from({ length: count }, (_, i) => (
-              <button key={i} onClick={() => setActiveIdx(i)} style={{
-                padding: '3px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-                cursor: 'pointer', border: '1px solid',
-                background:  activeIdx === i ? '#0F1E3C' : '#FAFAF8',
-                color:       activeIdx === i ? '#fff'    : '#5F5E5A',
-                borderColor: activeIdx === i ? '#0F1E3C' : '#E8E8E4',
-                transition: 'all .15s',
-              }}>Rec {i + 1}</button>
+              <button key={i} onClick={() => handleTabChange(i)} style={{ padding: '3px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid', background: activeIdx === i ? '#0F1E3C' : '#FAFAF8', color: activeIdx === i ? '#fff' : '#5F5E5A', borderColor: activeIdx === i ? '#0F1E3C' : '#E8E8E4' }}>Rec {i + 1}</button>
             ))}
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#0F1E3C' }}>
-            🎙 Recording {activeIdx + 1}{count > 1 ? ` of ${count}` : ''}
-          </span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#0F1E3C' }}>🎙 Recording {activeIdx + 1}{count > 1 ? ` of ${count}` : ''}</span>
           {status === 'loading' && <span style={{ fontSize: 10, color: '#888780', background: '#F1EFE8', padding: '2px 7px', borderRadius: 10 }}>Loading...</span>}
           {status === 'ready'   && <span style={{ fontSize: 10, color: '#085041', background: '#E1F5EE', padding: '2px 7px', borderRadius: 10 }}>● Ready</span>}
           {status === 'error'   && <span style={{ fontSize: 10, color: '#888780', background: '#F1EFE8', padding: '2px 7px', borderRadius: 10 }}>No audio</span>}
         </div>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#888780', fontWeight: 500 }}>
-          {fmtSecs(current)} / {totalStr}
-        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#888780', fontWeight: 500 }}>{fmtSecs(current)} / {totalStr}</span>
       </div>
-
-      {/* Row 2 — Controls + progress bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {/* Play controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <button onClick={() => skip(-5)} disabled={!canPlay} style={{
-            padding: '5px 10px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A',
-            border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: canPlay ? 'pointer' : 'not-allowed',
-            opacity: canPlay ? 1 : 0.4, fontFamily: 'inherit',
-          }}>−5s</button>
-
-          <button onClick={toggle} disabled={!canPlay} style={{
-            width: 38, height: 38, borderRadius: '50%', background: canPlay ? '#0F1E3C' : '#C4C2B9',
-            color: '#fff', border: 'none', fontSize: 14, cursor: canPlay ? 'pointer' : 'not-allowed',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            transition: 'background .15s',
-          }}>
+          <button onClick={() => skip(-5)} disabled={!canPlay} style={{ padding: '5px 10px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: canPlay ? 'pointer' : 'not-allowed', opacity: canPlay ? 1 : 0.4, fontFamily: 'inherit' }}>−5s</button>
+          <button onClick={toggle} disabled={!canPlay} style={{ width: 38, height: 38, borderRadius: '50%', background: canPlay ? '#0F1E3C' : '#C4C2B9', color: '#fff', border: 'none', fontSize: 14, cursor: canPlay ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             {status === 'loading' ? '⏳' : isPlaying ? '⏸' : '▶'}
           </button>
-
-          <button onClick={() => skip(5)} disabled={!canPlay} style={{
-            padding: '5px 10px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A',
-            border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: canPlay ? 'pointer' : 'not-allowed',
-            opacity: canPlay ? 1 : 0.4, fontFamily: 'inherit',
-          }}>+5s</button>
+          <button onClick={() => skip(5)} disabled={!canPlay} style={{ padding: '5px 10px', borderRadius: 6, background: '#F1EFE8', color: '#5F5E5A', border: '1px solid #E8E8E4', fontSize: 11, fontWeight: 600, cursor: canPlay ? 'pointer' : 'not-allowed', opacity: canPlay ? 1 : 0.4, fontFamily: 'inherit' }}>+5s</button>
         </div>
-
-        {/* Progress bar — takes remaining space */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            onClick={canPlay ? seek : undefined}
-            style={{ height: 6, background: '#E8E8E4', borderRadius: 3, overflow: 'hidden', cursor: canPlay ? 'pointer' : 'default', marginBottom: 4 }}>
-            <div style={{
-              height: '100%', background: '#0D9E8A', borderRadius: 3,
-              width: `${progress}%`, transition: 'width 0.3s linear',
-            }} />
+          <div onClick={canPlay ? seek : undefined} style={{ height: 6, background: '#E8E8E4', borderRadius: 3, overflow: 'hidden', cursor: canPlay ? 'pointer' : 'default', marginBottom: 4 }}>
+            <div style={{ height: '100%', background: '#0D9E8A', borderRadius: 3, width: `${progress}%`, transition: 'width 0.3s linear' }} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, color: '#888780' }}>{fmtSecs(current)}</span>
@@ -268,6 +235,7 @@ export default function Scribe() {
   const [loadingGrades, setLoadingGrades]         = useState(false)
   const [saving, setSaving]                       = useState(false)
   const [notif, setNotif]                         = useState(null)
+  const [activeRecIdx, setActiveRecIdx]           = useState(0)
 
   useEffect(() => { loadProviders() }, [])
   useEffect(() => {
@@ -276,12 +244,9 @@ export default function Scribe() {
   }, [activeTab])
 
   const loadProviders = async () => {
-    try {
-      setLoadingProviders(true)
-      const data = await usersAPI.getMyClinicans()
-      setProviders(data.clinicians || [])
-    } catch { showNotif('Failed to load providers.', 'red') }
-    finally  { setLoadingProviders(false) }
+    try { setLoadingProviders(true); const data = await usersAPI.getMyClinicans(); setProviders(data.clinicians || []) }
+    catch { showNotif('Failed to load providers.', 'red') }
+    finally { setLoadingProviders(false) }
   }
 
   const loadRecordings = async (providerId, date) => {
@@ -289,8 +254,7 @@ export default function Scribe() {
       setLoadingRecordings(true)
       const data = await visitsAPI.getAll(providerId, date)
       const all  = data.visits || []
-      const relevant = all.filter(v => !['upcoming', 'scheduled', 'in-progress'].includes(v.status))
-      setRecordings(relevant)
+      setRecordings(all.filter(v => !['upcoming', 'scheduled', 'in-progress'].includes(v.status)))
     } catch { showNotif('Failed to load recordings.', 'red') }
     finally  { setLoadingRecordings(false) }
   }
@@ -306,35 +270,23 @@ export default function Scribe() {
   }
 
   const loadMyNotes = async () => {
-    try {
-      setLoadingNotes(true)
-      const data = await notesAPI.getMyNotes()
-      setMyNotes(data.notes || [])
-    } catch { showNotif('Failed to load notes.', 'red') }
-    finally  { setLoadingNotes(false) }
+    try { setLoadingNotes(true); const data = await notesAPI.getMyNotes(); setMyNotes(data.notes || []) }
+    catch { showNotif('Failed to load notes.', 'red') }
+    finally { setLoadingNotes(false) }
   }
 
   const loadGrades = async () => {
-    try {
-      setLoadingGrades(true)
-      const data = await notesAPI.getMyGrades()
-      setGrades(data.grades || [])
-    } catch { showNotif('Failed to load grades.', 'red') }
-    finally  { setLoadingGrades(false) }
+    try { setLoadingGrades(true); const data = await notesAPI.getMyGrades(); setGrades(data.grades || []) }
+    catch { showNotif('Failed to load grades.', 'red') }
+    finally { setLoadingGrades(false) }
   }
 
-  const showNotif = (msg, type = 'green') => {
-    setNotif({ msg, type })
-    setTimeout(() => setNotif(null), 3000)
-  }
+  const showNotif = (msg, type = 'green') => { setNotif({ msg, type }); setTimeout(() => setNotif(null), 3000) }
 
   const saveDraft = async () => {
     if (!finalNote.trim()) { showNotif('Please write the note before saving.', 'amber'); return }
-    try {
-      setSaving(true)
-      await notesAPI.saveDraft(selectedRec.id, finalNote)
-      showNotif('Draft saved successfully')
-    } catch (err) { showNotif(`Save failed: ${err.message}`, 'red') }
+    try { setSaving(true); await notesAPI.saveDraft(selectedRec.id, finalNote); showNotif('Draft saved successfully') }
+    catch (err) { showNotif(`Save failed: ${err.message}`, 'red') }
     finally { setSaving(false) }
   }
 
@@ -351,7 +303,9 @@ export default function Scribe() {
     finally { setSaving(false) }
   }
 
-  const openRecording = (rec) => { setSelectedRec(rec); loadNote(rec.id); setScreen('note') }
+  const openRecording = (rec) => {
+    setSelectedRec(rec); loadNote(rec.id); setActiveRecIdx(0); setScreen('note')
+  }
 
   const handleNav = (tab) => {
     setActiveTab(tab)
@@ -359,8 +313,6 @@ export default function Scribe() {
     else setScreen(tab)
     sidebar.close()
   }
-
-  // ─── SIDEBAR ──────────────────────────────────────
 
   const SidebarEl = () => (
     <div className={`sf-sidebar${sidebar.open ? ' open' : ''}`}>
@@ -381,9 +333,7 @@ export default function Scribe() {
           <div className="sf-chip-label">Current Provider</div>
           <div className="sf-chip-name">{selectedProvider.name}</div>
           <div className="sf-chip-spec">{selectedProvider.specialty || 'Clinician'}</div>
-          {selectedDate && screen !== 'providers' && (
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,.5)', marginTop: 4 }}>📅 {fmtShortDate(selectedDate)}</div>
-          )}
+          {selectedDate && screen !== 'providers' && <div style={{ fontSize: 11, color: 'rgba(255,255,255,.5)', marginTop: 4 }}>📅 {fmtShortDate(selectedDate)}</div>}
           <div className="sf-chip-change" onClick={() => { setScreen('providers'); setSelectedProvider(null); setSelectedRec(null); setRecordings([]); sidebar.close() }}>Change provider</div>
         </div>
       )}
@@ -398,12 +348,7 @@ export default function Scribe() {
   // ─── MY NOTES ─────────────────────────────────────
 
   if (screen === 'notes') {
-    const byProvider = myNotes.reduce((acc, n) => {
-      const key = n.clinician_name || 'Unknown'
-      if (!acc[key]) acc[key] = []
-      acc[key].push(n)
-      return acc
-    }, {})
+    const byProvider = myNotes.reduce((acc, n) => { const key = n.clinician_name || 'Unknown'; if (!acc[key]) acc[key] = []; acc[key].push(n); return acc }, {})
     return (
       <div className="sf-page">
         <SidebarEl /><Overlay open={sidebar.open} onClick={sidebar.close} /><Hamburger onClick={sidebar.toggle} />
@@ -418,8 +363,7 @@ export default function Scribe() {
                 <div key={l} className="sf-stat"><div className="sf-stat-val" style={{ color: c }}>{v}</div><div className="sf-stat-lbl">{l}</div></div>
               ))}
             </div>
-            {loadingNotes ? <Empty icon="⏳" title="Loading..." /> :
-             myNotes.length === 0 ? <Empty icon="📋" title="No notes yet" sub="Notes you write will appear here." /> :
+            {loadingNotes ? <Empty icon="⏳" title="Loading..." /> : myNotes.length === 0 ? <Empty icon="📋" title="No notes yet" sub="Notes you write will appear here." /> :
              Object.entries(byProvider).map(([provName, provNotes]) => (
               <div key={provName} style={{ marginBottom: 24 }}>
                 <div style={st.provHeader}>
@@ -432,10 +376,7 @@ export default function Scribe() {
                   const s = STATUS_CFG[n.status] || { label: n.status, cls: 'badge-gray' }
                   return (
                     <div key={n.id} className="sf-row" style={{ marginLeft: 16 }}>
-                      <div className="sf-row-left">
-                        <span style={{ fontSize: 20 }}>📄</span>
-                        <div><div className="sf-row-name">{n.patient_name}</div><div className="sf-row-meta">{n.mrn} · {n.visit_type} · {n.visit_date}</div></div>
-                      </div>
+                      <div className="sf-row-left"><span style={{ fontSize: 20 }}>📄</span><div><div className="sf-row-name">{n.patient_name}</div><div className="sf-row-meta">{n.mrn} · {n.visit_type} · {n.visit_date}</div></div></div>
                       <div className="sf-row-right"><span className={`badge ${s.cls}`}>{s.label}</span></div>
                     </div>
                   )
@@ -474,13 +415,8 @@ export default function Scribe() {
                 <button style={st.backLink} onClick={() => setSelectedGrade(null)}>← Back to grades</button>
                 <div style={st.gradeCard}>
                   <div style={st.gradeCardTop}>
-                    <div>
-                      <div style={st.gradeName}>{selectedGrade.patient_name}</div>
-                      <div style={st.gradeMeta}>{selectedGrade.mrn} · {selectedGrade.visit_type} · {selectedGrade.visit_date} · {selectedGrade.clinician_name}</div>
-                    </div>
-                    <div style={{ fontSize: 36, fontWeight: 700, color: selectedGrade.overall_score >= 90 ? '#0D9E8A' : selectedGrade.overall_score >= 75 ? '#E8940A' : '#E24B4A', lineHeight: 1 }}>
-                      {selectedGrade.overall_score}<span style={{ fontSize: 14, color: '#888780', fontWeight: 400 }}>/100</span>
-                    </div>
+                    <div><div style={st.gradeName}>{selectedGrade.patient_name}</div><div style={st.gradeMeta}>{selectedGrade.mrn} · {selectedGrade.visit_type} · {selectedGrade.visit_date} · {selectedGrade.clinician_name}</div></div>
+                    <div style={{ fontSize: 36, fontWeight: 700, color: selectedGrade.overall_score >= 90 ? '#0D9E8A' : selectedGrade.overall_score >= 75 ? '#E8940A' : '#E24B4A', lineHeight: 1 }}>{selectedGrade.overall_score}<span style={{ fontSize: 14, color: '#888780', fontWeight: 400 }}>/100</span></div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 20 }}>
                     {[['Accuracy', selectedGrade.accuracy],['Completeness', selectedGrade.completeness],['Medical Terminology', selectedGrade.terminology],['Formatting', selectedGrade.formatting]].map(([l, v]) => (
@@ -493,29 +429,15 @@ export default function Scribe() {
                       </div>
                     ))}
                   </div>
-                  {selectedGrade.comment && (
-                    <div style={st.commentBox}>
-                      <div style={st.commentLabel}>💬 Feedback from QPS ({selectedGrade.qps_name})</div>
-                      <div style={st.commentText}>{selectedGrade.comment}</div>
-                    </div>
-                  )}
-                  {selectedGrade.final_note && (
-                    <div style={{ marginTop: 16 }}>
-                      <div style={st.commentLabel}>📄 Your Note</div>
-                      <pre style={st.notePreview}>{selectedGrade.final_note}</pre>
-                    </div>
-                  )}
+                  {selectedGrade.comment && <div style={st.commentBox}><div style={st.commentLabel}>💬 Feedback from QPS ({selectedGrade.qps_name})</div><div style={st.commentText}>{selectedGrade.comment}</div></div>}
+                  {selectedGrade.final_note && <div style={{ marginTop: 16 }}><div style={st.commentLabel}>📄 Your Note</div><pre style={st.notePreview}>{selectedGrade.final_note}</pre></div>}
                 </div>
               </div>
             ) : grades.map(g => (
               <div key={g.id} className="sf-row" style={{ cursor: 'pointer' }} onClick={() => setSelectedGrade(g)}>
                 <div className="sf-row-left">
                   <div style={{ width: 48, height: 48, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, background: g.overall_score >= 90 ? '#E1F5EE' : g.overall_score >= 75 ? '#FAEEDA' : '#FCEBEB', color: g.overall_score >= 90 ? '#085041' : g.overall_score >= 75 ? '#633806' : '#501313' }}>{g.overall_score}</div>
-                  <div>
-                    <div className="sf-row-name">{g.patient_name}</div>
-                    <div className="sf-row-meta">{g.mrn} · {g.visit_type} · {g.visit_date} · {g.clinician_name}</div>
-                    {g.comment && <div style={{ fontSize: 12, color: '#5F5E5A', marginTop: 4, fontStyle: 'italic' }}>"{g.comment.length > 60 ? g.comment.slice(0, 60) + '...' : g.comment}"</div>}
-                  </div>
+                  <div><div className="sf-row-name">{g.patient_name}</div><div className="sf-row-meta">{g.mrn} · {g.visit_type} · {g.visit_date} · {g.clinician_name}</div>{g.comment && <div style={{ fontSize: 12, color: '#5F5E5A', marginTop: 4, fontStyle: 'italic' }}>"{g.comment.length > 60 ? g.comment.slice(0, 60) + '...' : g.comment}"</div>}</div>
                 </div>
                 <div className="sf-row-right"><span style={{ fontSize: 12, color: '#0D9E8A', fontWeight: 500 }}>View →</span></div>
               </div>
@@ -591,11 +513,9 @@ export default function Scribe() {
              providers.length === 0 ? <Empty icon="🏥" title="No providers assigned" sub="Ask your admin to assign you to a clinician." /> : (
               <div className="sf-provider-grid">
                 {providers.map(p => {
-                  const id   = p.clinician_id || p.id
-                  const name = p.clinician_name || p.name || 'Unknown'
+                  const id = p.clinician_id || p.id; const name = p.clinician_name || p.name || 'Unknown'
                   return (
-                    <div key={id} className="sf-provider-card"
-                      onClick={() => { setSelectedProvider({ id, name, specialty: p.specialty || '' }); setSelectedDate(localDateStr(0)); setScreen('date') }}>
+                    <div key={id} className="sf-provider-card" onClick={() => { setSelectedProvider({ id, name, specialty: p.specialty || '' }); setSelectedDate(localDateStr(0)); setScreen('date') }}>
                       <div className="sf-provider-avatar">{(name || 'U').charAt(0).toUpperCase()}</div>
                       <div style={{ flex: 1 }}><div className="sf-provider-name">{name}</div><div className="sf-provider-spec">{p.specialty || 'Clinician'}</div></div>
                       <span style={{ fontSize: 18, color: '#C4C2B9' }}>→</span>
@@ -688,11 +608,9 @@ export default function Scribe() {
             {loadingRecordings ? <Empty icon="⏳" title="Loading..." /> :
              recordings.length === 0 ? <Empty icon="📭" title="No recordings for this date" sub={`No visits found for ${selectedProvider?.name} on ${fmtDateLabel(selectedDate)}`} /> :
              recordings.map(rec => {
-const effectiveStatus = ['submitted','uploaded'].includes(rec.note_status)
-  ? rec.note_status
-  : rec.status
-const s      = STATUS_CFG[effectiveStatus] || { label: effectiveStatus, cls: 'badge-gray' }
-const isDone = ['submitted','uploaded'].includes(rec.note_status)
+              const effectiveStatus = ['submitted','uploaded'].includes(rec.note_status) ? rec.note_status : rec.status
+              const s    = STATUS_CFG[effectiveStatus] || { label: effectiveStatus, cls: 'badge-gray' }
+              const isDone = ['submitted','uploaded'].includes(rec.note_status)
               return (
                 <div key={rec.id} className="sf-row">
                   <div className="sf-row-left">
@@ -718,6 +636,9 @@ const isDone = ['submitted','uploaded'].includes(rec.note_status)
   // ─── NOTE EDITOR ──────────────────────────────────
 
   const isDone = ['submitted','uploaded'].includes(selectedRec?.status)
+  const transcriptions = note ? parseTranscriptions(note.transcription) : []
+  const currentTranscription = transcriptions[activeRecIdx] || null
+
   return (
     <div className="sf-page-fixed">
       <SidebarEl /><Overlay open={sidebar.open} onClick={sidebar.close} /><Hamburger onClick={sidebar.toggle} />
@@ -733,30 +654,48 @@ const isDone = ['submitted','uploaded'].includes(rec.note_status)
           <div className="sf-avatar">{(currentUser.name || 'S').charAt(0).toUpperCase()}</div>
         </div>
 
-        <AudioPlayer visitId={selectedRec?.id} durationSecs={selectedRec?.duration_seconds || 0} />
+        {/* Audio player — synced with transcription tabs */}
+        <AudioPlayer
+          visitId={selectedRec?.id}
+          durationSecs={selectedRec?.duration_seconds || 0}
+          onTabChange={(idx) => setActiveRecIdx(idx)}
+        />
 
         {notif && <div className={`sf-notif sf-notif-${notif.type}`}>✓ {notif.msg}</div>}
 
         <div className="sf-panels">
+          {/* Transcription — per recording */}
           <div className="sf-panel">
-            <div className="sf-panel-head"><span className="sf-panel-title">Transcription</span><span className="badge badge-gray">Auto</span></div>
+            <div className="sf-panel-head">
+              <span className="sf-panel-title">Transcription</span>
+              <span className="badge badge-gray">
+                {transcriptions.length > 1 ? `Rec ${activeRecIdx + 1} of ${transcriptions.length}` : 'Auto'}
+              </span>
+            </div>
             <div className="sf-panel-body">
               {loadingNote ? <div style={{ color: '#888780', fontSize: 13 }}>Loading...</div> :
-               note?.transcription ? note.transcription.split('\n\n').map((block, i) => (
-                <div key={i} className="sf-transcript-block"><span className="sf-speaker-txt">{block}</span></div>
-              )) : (
+               currentTranscription ? (
+                <div style={{ fontSize: 13, color: '#0F1E3C', lineHeight: 1.8 }}>{currentTranscription}</div>
+              ) : (
                 <div style={{ color: '#888780', fontSize: 13, lineHeight: 1.7 }}>
                   <div style={{ fontSize: 24, marginBottom: 8 }}>🎙</div>
                   <div style={{ fontWeight: 500, color: '#0F1E3C', marginBottom: 4 }}>Transcription pending</div>
-                  <div>Will appear after AI processing.</div>
+                  <div>Will appear after AI processing (~1-2 min).</div>
                 </div>
               )}
             </div>
           </div>
+
+          {/* AI Draft — structured note */}
           <div className="sf-panel">
-            <div className="sf-panel-head"><span className="sf-panel-title">AI Draft</span><span className="badge badge-blue">AI Generated</span></div>
+            <div className="sf-panel-head">
+              <span className="sf-panel-title">AI Draft</span>
+              <span className="badge badge-blue">AI Generated</span>
+            </div>
             {loadingNote ? <div style={{ padding: 12, color: '#888780', fontSize: 13 }}>Loading...</div> :
-             note?.ai_draft ? <textarea className="sf-textarea sf-textarea-readonly" value={note.ai_draft} readOnly /> : (
+             note?.ai_draft ? (
+              <textarea className="sf-textarea sf-textarea-readonly" value={note.ai_draft} readOnly />
+            ) : (
               <div style={{ padding: 16, color: '#888780', fontSize: 13, lineHeight: 1.7 }}>
                 <div style={{ fontSize: 24, marginBottom: 8 }}>🤖</div>
                 <div style={{ fontWeight: 500, color: '#0F1E3C', marginBottom: 4 }}>AI draft pending</div>
@@ -764,12 +703,18 @@ const isDone = ['submitted','uploaded'].includes(rec.note_status)
               </div>
             )}
           </div>
+
+          {/* Final Note */}
           <div className="sf-panel">
-            <div className="sf-panel-head"><span className="sf-panel-title">Final Note</span><span className={`badge ${isDone ? 'badge-green' : 'badge-amber'}`}>{isDone ? 'Submitted' : 'Editing'}</span></div>
+            <div className="sf-panel-head">
+              <span className="sf-panel-title">Final Note</span>
+              <span className={`badge ${isDone ? 'badge-green' : 'badge-amber'}`}>{isDone ? 'Submitted' : 'Editing'}</span>
+            </div>
             {loadingNote ? <div style={{ padding: 12, color: '#888780', fontSize: 13 }}>Loading...</div> : (
               <textarea className="sf-textarea" value={finalNote} onChange={e => setFinalNote(e.target.value)}
                 readOnly={isDone} style={isDone ? { background: '#FAFAF8', cursor: 'default' } : {}}
-                placeholder="Write the final clinical note here..." spellCheck />
+                placeholder={`Write the final clinical note here...\n\nCHIEF COMPLAINT:\n\nHISTORY OF PRESENT ILLNESS (HPI):\n\nPHYSICAL EXAMINATION (PE):\n\nIMAGING:\n\nASSESSMENT & PLAN (A&P):`}
+                spellCheck />
             )}
             {!isDone && (
               <div className="sf-bottom-bar">
@@ -818,12 +763,8 @@ function ChangePassword({ showNotif }) {
     if (!current || !newPass) { showNotif('All fields are required.', 'red'); return }
     if (newPass !== confirm)  { showNotif('Passwords do not match.', 'red'); return }
     if (newPass.length < 6)   { showNotif('Minimum 6 characters.', 'red'); return }
-    try {
-      setSaving(true)
-      await authAPI.changePassword(current, newPass)
-      showNotif('Password changed successfully')
-      setCurrent(''); setNewPass(''); setConfirm('')
-    } catch (err) { showNotif(err.message, 'red') }
+    try { setSaving(true); await authAPI.changePassword(current, newPass); showNotif('Password changed successfully'); setCurrent(''); setNewPass(''); setConfirm('') }
+    catch (err) { showNotif(err.message, 'red') }
     finally { setSaving(false) }
   }
   return (
@@ -838,8 +779,6 @@ function ChangePassword({ showNotif }) {
     </div>
   )
 }
-
-// ─── STYLES ───────────────────────────────────────────────────────────────────
 
 const st = {
   navBadge:     { marginLeft: 'auto', background: 'rgba(255,255,255,.15)', borderRadius: 10, fontSize: 10, padding: '1px 7px', color: 'rgba(255,255,255,.7)' },

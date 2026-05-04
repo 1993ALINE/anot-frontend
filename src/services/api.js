@@ -311,4 +311,11 @@ export const adminAPI = {
     const res = await fetch(`${BASE_URL}/audit?${query}`, { headers: headers() })
     return handleResponse(res)
   },
+  generateAI: async (visitId) => {
+  const res = await fetch(`${BASE_URL}/visits/${visitId}/generate-ai`, {
+    method: 'POST',
+    headers: headers(),
+  })
+  return handleResponse(res)
+},
 }
