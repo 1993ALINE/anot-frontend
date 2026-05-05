@@ -89,7 +89,7 @@ function AudioPlayer({ visitId, durationSecs, onTabChange }) {
   useEffect(() => {
     if (!visitId) return
     const token = localStorage.getItem('token')
-    fetch(`http://https://anot-backend-production.up.railway.app/api/audio/${visitId}/count`, {
+    fetch(`https://anot-backend-production.up.railway.app/api/audio/${visitId}/count`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then(r => r.json()).then(d => { if (d.count > 0) setCount(d.count) }).catch(() => {})
   }, [visitId])
@@ -101,7 +101,7 @@ function AudioPlayer({ visitId, durationSecs, onTabChange }) {
     setDuration(initDur); maxTimeRef.current = initDur
     if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null }
     const token = localStorage.getItem('token')
-    fetch(`http://https://anot-backend-production.up.railway.app/api/audio/${visitId}?index=${activeIdx}`, {
+    fetch(`https://anot-backend-production.up.railway.app/api/audio/${visitId}?index=${activeIdx}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => { if (!res.ok) throw new Error('no audio'); return res.blob() })

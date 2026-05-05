@@ -118,7 +118,7 @@ export default function Admin() {
 
     const fetchAssignments = async () => {
         try {
-            const res = await fetch('http://https://anot-backend-production.up.railway.app/api/assignments', {
+            const res = await fetch('https://anot-backend-production.up.railway.app/api/assignments', {
                 headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
             })
             const data = await res.json()
@@ -147,7 +147,7 @@ export default function Admin() {
     const loadAuditLogs = async () => {
         try {
             setAuditLoading(true)
-            const res = await fetch('http://https://anot-backend-production.up.railway.app/api/audit?limit=200', {
+            const res = await fetch('https://anot-backend-production.up.railway.app/api/audit?limit=200', {
                 headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
             })
             const data = await res.json()
@@ -238,7 +238,7 @@ export default function Admin() {
         if (!assignClinicianId || !assignScribeId) { showToast('Select both a clinician and a scribe.', 'error'); return }
         try {
             setAssignLoading(true)
-            const res = await fetch('http://https://anot-backend-production.up.railway.app/api/assignments', {
+            const res = await fetch('https://anot-backend-production.up.railway.app/api/assignments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
                 body: JSON.stringify({ clinician_id: assignClinicianId, scribe_id: assignScribeId }),
@@ -254,7 +254,7 @@ export default function Admin() {
 
     const removeAssignment = async (id) => {
         try {
-            await fetch(`http://https://anot-backend-production.up.railway.app/api/assignments/${id}`, {
+            await fetch(`https://anot-backend-production.up.railway.app/api/assignments/${id}`, {
                 method: 'DELETE',
                 headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
             })
