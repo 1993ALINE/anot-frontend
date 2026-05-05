@@ -84,7 +84,7 @@ function AudioPlayer({ visitId, durationSecs }) {
   useEffect(() => {
     if (!visitId) return
     const token = localStorage.getItem('token')
-    fetch(`http://localhost:5000/api/audio/${visitId}/count`, {
+    fetch(`http://https://anot-backend-production.up.railway.app/api/audio/${visitId}/count`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then(r => r.json()).then(d => { if (d.count > 0) setCount(d.count) }).catch(() => {})
   }, [visitId])
@@ -95,7 +95,7 @@ function AudioPlayer({ visitId, durationSecs }) {
     const initDur = activeIdx === 0 ? (durationSecs || 0) : 0
     setDuration(initDur); maxTimeRef.current = initDur
     const token = localStorage.getItem('token')
-    fetch(`http://localhost:5000/api/audio/${visitId}?index=${activeIdx}`, {
+    fetch(`http://https://anot-backend-production.up.railway.app/api/audio/${visitId}?index=${activeIdx}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => { if (res.ok) return res.blob(); throw new Error('no audio') })
@@ -198,7 +198,7 @@ function AINoteModal({ visit, onClose }) {
 
   useEffect(() => {
     const token = localStorage.getItem('token')
-    fetch(`http://localhost:5000/api/notes/visit/${visit.id}`, {
+    fetch(`http://https://anot-backend-production.up.railway.app/api/notes/visit/${visit.id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
@@ -434,7 +434,7 @@ export default function Clinician() {
         // Append additional recording
         const formData = new FormData()
         formData.append('audio', file, file.name)
-        const res = await fetch(`http://localhost:5000/api/audio/${uploadVisit.id}/append`, {
+        const res = await fetch(`http://https://anot-backend-production.up.railway.app/api/audio/${uploadVisit.id}/append`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           body: formData,
@@ -446,7 +446,7 @@ export default function Clinician() {
         await visitsAPI.updateStatus(uploadVisit.id, 'in-progress')
         const formData = new FormData()
         formData.append('audio', file, file.name)
-        const res = await fetch(`http://localhost:5000/api/audio/${uploadVisit.id}`, {
+        const res = await fetch(`http://https://anot-backend-production.up.railway.app/api/audio/${uploadVisit.id}`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           body: formData,
