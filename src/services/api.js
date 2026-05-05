@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_url ||'http://localhost:5000/api'
+const BASE_URL = 'https://anot-backend-production.up.railway.app/api'
 
 const getToken = () => localStorage.getItem('token')
 
