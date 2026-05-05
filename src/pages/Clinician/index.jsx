@@ -990,10 +990,19 @@ export default function Clinician() {
                   )}
 
                   {/* Uploaded */}
-                  {!isPast && !isFuture && visit.status === 'uploaded' && (
-                    <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5' }}
-                      onClick={() => setAiNoteVisit(visit)}>🤖 AI Note</button>
-                  )}
+{/* Uploaded */}
+{!isPast && !isFuture && visit.status === 'uploaded' && (
+  <div style={{ display: 'flex', gap: 5 }}>
+    <button style={{ ...s.btn, background: '#E6F1FB', color: '#0C447C', border: '1px solid #B8D6F5' }}
+      onClick={() => setAiNoteVisit(visit)}>🤖 AI Note</button>
+    <button style={{ ...s.btn, ...s.btnNavy }} onClick={async () => {
+      try {
+        const data = await notesAPI.getByVisit(visit.id)
+        setReviewNote({ ...visit, final_note: data.note?.final_note, note_id: data.note?.id, scribe_name: data.note?.scribe_name || visit.scribe_name })
+      } catch { showToast('Failed to load note.', 'error') }
+    }}>📋 Final Note</button>
+  </div>
+)}
                 </div>
               </div>
             )
